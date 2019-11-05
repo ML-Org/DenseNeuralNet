@@ -1,7 +1,8 @@
 import numpy as np
 class L2():
-    def __int__(self, regularization_constant=0.1):
-        self._lambda = regularization_constant
+    def __init__(self, _lambda=0.1):
+        self._lambda = _lambda
+
 def mini_batches(data,batch_size=1):
     n_chunks = np.ceil(len(data)/batch_size)
     return np.array_split(data, n_chunks)

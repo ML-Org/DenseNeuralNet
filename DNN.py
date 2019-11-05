@@ -25,6 +25,8 @@ class Model():
         self.loss_per_epoch = []
         self.cost = 0
         self.cost_per_epoch = []
+        self.validation_loss_per_epoch =[]
+        self.validation_cost_per_epoch= []
 
 
 
@@ -74,15 +76,28 @@ class Model():
             #     layer.init_weights()
             #     pass
 
-    def fit(self, X, y, validation_split=0.2, epochs = 1, batch_size=10):
+    def fit(self, X, y, val_X, val_y, regularization=L2(0.001), validation_split=0.2, epochs = 100, batch_size=10):
         update_trend = [[],[]]
+        # n_cols_x, n_cols_y = X.shape[-1], y.shape[-1]
+        # data = np.hstack((X,y))
+        # train_data, validation = train_test_split( data,test_size=validation_split, random_state=seed, stratify=np.argmax(data[:, -n_cols_y:], axis=1)) #stratify=np.argmax(data[:, -n_cols_y:], axis=1)
+        # train_X, train_y = train_data[:,:n_cols_x] , train_data[:, -n_cols_y: ]
+        # val_X, val_y = validation[:, :n_cols_x], validation[:, -n_cols_y:]
+        train_X= X
+        train_y = y
+        print("=====TRAIN and Validation for lambda===== {}".format(regularization._lambda))
+        print(np.unique(np.argmax(train_y, axis=1), return_counts=True))
+        print(np.unique(np.argmax(val_y, axis=1), return_counts=True))
+        print("===============================")
         for epoch in range(epochs):
             self.cost = 0
             self.loss = 0
             outputs = []
-            for mini_batch in mini_batches(X, batch_size=batch_size):
+            list_mini_batches= mini_batches(train_X, batch_size=batch_size)
+            for mini_batch in list_mini_batches:
                 self.cost = 0
                 self.loss = 0
+                self.loss_per_batch=0
                 for row_idx, row in enumerate(mini_batch):
                     row = np.hstack((1, row)).reshape(-1,1)
                     input = row
@@ -112,28 +127,41 @@ class Model():
                             self.layers[idx+1].deltas_acc += deltas_acc
                             if idx==0:
                                 deltas = self.layers[idx].deltas[1:] # rip off bias delta
-
                                 deltas_acc=np.tile(row.T, deltas.shape) * deltas
                                 self.layers[idx].deltas_acc += deltas_acc
                         if self.layers[idx].isOutputLayer:
                             expected = _y
                             pred = self.layers[-1].layer_activations
                             self.loss += np.sum(np.square(expected-pred))
-                            #self.cost += (self.cost_function(expected, pred))
+                            self.cost += (self.cost_function(expected, pred))
 
                 i =0
                 for layer in self.layers:
                     # reset delta acc for each epoch
                     # average_acc_detlas
-                    layer.deltas_acc = (1/len(X))*layer.deltas_acc
-                    layer.update_weights()
+                    layer.deltas_acc = (1/len(train_X))*layer.deltas_acc
+                    layer.update_weights(regularize=regularization, n_samples=len(mini_batch))
                     # reset deltas_acc for next epoch
                     layer.deltas_acc = 0
                     i+=1
 
+            pred_val_y= self.predict(val_X)
+            pred_val_y = np.array(pred_val_y)
+            expected_val_y = val_y
+            self.validation_loss_per_epoch.append((1/len(val_y)) * np.sum(np.square(expected_val_y-pred_val_y)))
+            self.validation_cost_per_epoch.append((-1/len(val_y)) * self.cost_function(expected_val_y, pred_val_y))
+                #self.loss_per_batch += ((1 / len(mini_batch)) * self.loss)
+            self.loss_per_epoch.append((1 / len(train_X)) * self.loss)
+            self.cost_per_epoch.append((-1 / len(train_X)) * self.cost)
+        print("Validation - metrics", epoch+1)
+        print(classification_report(y_true=np.argmax(expected_val_y, axis=1),y_pred=np.argmax(pred_val_y, axis=1)))
+            # if len(self.loss_per_epoch) > 2:
+            #     if np.isclose(self.loss_per_epoch[-1], self.loss_per_epoch[-2], atol=0.000001):
+            #         print("the algo converged at {}".format(epoch))
+            #         print("loss at epoch {} and {} are {}, {}".format(epoch-1, epoch, self.loss_per_epoch[-2], self.loss_per_epoch[-1]))
+            #         break
 
-            #self.cost_per_epoch.append((-1 / len(X)) * self.cost)
-            self.loss_per_epoch.append((1 / len(X)) * self.loss)
+
             #self.loss = np.mean(np.sum(outputs - y, axis=0))**(1/2)
             # """
             # epoch: {} \n
@@ -156,7 +184,7 @@ class Model():
                 # print(self.layers[idx].weights)
                 output = self.layers[idx].forward_pass(row)
                 row = output
-            outputs.append(row)
+            outputs.append(row.ravel())
         return outputs
 
     def cost_function(self, expected_output, pred):
@@ -231,13 +259,17 @@ class Dense():
         return deltas,  deltas_acc
 
 
-    def update_weights(self, regularize=L2):
+    def update_weights(self, n_samples ,regularize=L2(0.001)):
         #ignore bias in deltas
-        if len(self.weights) < len(self.deltas_acc):
-            self.weights -= self.lr * self.deltas_acc[1:]
-        else:
-            self.weights -= self.lr * self.deltas_acc
+        l2_penalty_vector=0
+        if regularize is not None:
+            l2_penalty = regularize._lambda * (1/n_samples) * np.sum(self.weights)
+            l2_penalty_vector = np.tile(l2_penalty, reps=len(self.deltas_acc)).reshape(-1, 1)
+            # don't penalize bias terms
+            l2_penalty_vector[0]=0
+        self.weights -= (self.lr * self.deltas_acc) + l2_penalty_vector
         return self.weights
+
 
     def init_weights(self,bias=True, method="glorot", epsilon=0.001):
         if method == "glorot" and method=="zeros" and method=="random":
@@ -253,12 +285,14 @@ class Dense():
                                            size=self.layer_shape[0] * self.layer_shape[1]).reshape(self.layer_shape)
 
         elif method=="zeros":
+            self.epsilon = epsilon
             if bias:
                 self.weights= np.zeros((self.layer_shape[0], self.layer_shape[1]+1))
             else:
                 self.weights = np.zeros((self.layer_shape))
 
         elif method=="random":
+            self.epsilon = epsilon
             if bias:
                 self.weights = np.random.uniform(low=-self.epsilon, high=self.epsilon,
                                                  size=self.layer_shape[0] * (self.layer_shape[1] + 1)) \
@@ -268,6 +302,7 @@ class Dense():
                                                  size=self.layer_shape[0] * self.layer_shape[1]).reshape(
                     self.layer_shape)
         else:
+            self.epsilon = epsilon
             if bias:
                 self.weights= np.linspace(start= -self.epsilon, stop= self.epsilon, num=self.layer_shape[0] * (self.layer_shape[1]+1))\
                     .reshape(self.layer_shape[0], self.layer_shape[1]+1)
@@ -285,48 +320,6 @@ class Dense():
         Regularization {}
         """.format(self.weights.shape, self.inputs_from_prev_layer, self.weights, self.regularization)
 
-# class InputLayer(Dense):
-#     def __init__(self, layer):
-#         self._wrapped_obj = layer
-#
-#     def __getattr__(self, attr):
-#         # see if this object has attr
-#         # NOTE do not use hasattr, it goes into
-#         # infinite recurrsion
-#         if attr in self.__dict__:
-#             # this object has it
-#             return getattr(self, attr)
-#         # proxy to the wrapped object
-#         return getattr(self._wrapped_obj, attr)
-#
-# class OutputLayer(Dense):
-#     def __init__(self, layer):
-#         self._wrapped_obj = layer
-#
-#     def __getattr__(self, attr):
-#         # see if this object has attr
-#         # NOTE do not use hasattr, it goes into
-#         # infinite recurrsion
-#         if attr in self.__dict__:
-#             # this object has it
-#             return getattr(self, attr)
-#         # proxy to the wrapped object
-#         return getattr(self._wrapped_obj, attr)
-
-
-def plot_2d_space(X, y, label='Classes'):
-    colors = ['#1F77B4', '#FF7F0E']
-    markers = ['o', 's']
-    for l, c, m in zip(np.unique(y), colors, markers):
-        plt.scatter(
-            X[y==l, 0],
-            X[y==l, 1],
-            c=c, label=l, marker=m
-        )
-    plt.title(label)
-    plt.legend(loc='upper right')
-    plt.show()
-
 def preprocess_data(data, upsample = False):
     data_x = data.iloc[:, 0:-1]
     data_y = data.iloc[:,-1:np.newaxis]
@@ -343,7 +336,7 @@ def preprocess_data(data, upsample = False):
 
 
 if __name__ == "__main__":
-    seed = 121
+    seed=121
     np.random.seed(seed)
     # X,y  =  make_classification(n_samples=1000, n_features=4, n_informative=4, n_classes=4, n_redundant=0, n_repeated=0, random_state=123)
     # data_X = pd.DataFrame(X)
@@ -355,67 +348,89 @@ if __name__ == "__main__":
     data_raw = pd.read_csv("BSOM_Dataset_for_HW3.csv")
     data = data_raw[["all_mcqs_avg_n20","all_NBME_avg_n4", "CBSE_01" , "CBSE_02","LEVEL"]]
     data=data.dropna()
-    train=data.sample(frac=0.8, random_state=seed)
-    test = data.drop(train.index)
-    train = preprocess_data(train)
-    test = preprocess_data(test)
+    # train=data.sample(frac=0.8, random_state=seed)
+    # validation = train.sample(frac=0.2, random_state=seed)
+    # train = train.drop(validation.index)
+    # test = data.drop(train.index)
+    #
+    # train = preprocess_data(train)
+    # validation = preprocess_data(validation)
+    # test = preprocess_data(test)
 
 
     # using stratified split to ensure all classes are present while testing
-    #pre_processed_data =  preprocess_data(data,upsample=False)
-    #train, test= train_test_split(pre_processed_data, shuffle=True, test_size=0.2, random_state=seed) #stratify=pre_processed_data[:, -1]
-    X_train, X_test= train[:,:-1].astype(np.float64), test[:,:-1].astype(np.float64)
-    y_train, y_test = train[:,-1], test[:,-1]
+    pre_processed_data =  preprocess_data(data,upsample=False)
+    train, test= train_test_split(pre_processed_data, shuffle=True, test_size=0.2, random_state=seed, stratify=pre_processed_data[:, -1]) #stratify=pre_processed_data[:, -1]
+    train, validation = train_test_split(train, shuffle=True, test_size=0.2, random_state=seed, stratify=train[:, -1])
+    X_train, X_test, X_val= train[:,:-1].astype(np.float64), test[:,:-1].astype(np.float64), validation[:,:-1].astype(np.float64)
+    y_train, y_test, y_val = train[:,-1], test[:,-1], validation[:,-1]
     print("="*10)
     print(np.unique(y_train, return_counts=True))
+    print(np.unique(y_val, return_counts=True))
     print(np.unique(y_test, return_counts=True))
     print("=" * 10)
     # converting strings to numerics labels
     y_train = np.array(pd.get_dummies(y_train), dtype=np.int32)
     y_test= np.array(pd.get_dummies(y_test), dtype=np.int32)
+    y_val = np.array(pd.get_dummies(y_val), dtype=np.int32)
+
     #y_train, y_test = train_test_split(np.array(labels), test_size=0.2, random_state=seed)
-    model = Model()
-    n_cols = X_train.shape[-1]
-    model.add(Dense(5, activation=sigmoid ,input_shape=(n_cols,)))
-    # model.add(Dense(5, activation=sigmoid))
-    # model.add(Dense(2, activation=sigmoid))
-    model.add(Dense(4, activation=sigmoid))
-    # model.add(Dense(6, activation=relu))
-    # model.add(Dense(4, activation=relu))
-    #model.add(Dense(4))
-    model.compile(learning_rate=0.1, initializer="random", epsilon=0.001)
-    if len(y_train.shape) == 1:
-        y_train = y_train.reshape(-1,1)
-    EPOCHS = 500
-    model.fit(X_train, y_train, epochs=EPOCHS, batch_size=len(X_train))
-    print("Training predictions")
-    pred = model.predict(X_train)
-    print(classification_report(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_train, axis=1))
-    print("Test predictions")
-    pred = model.predict(X_test)
-    print(classification_report(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_test, axis=1))
-    print(np.argmax(pred,axis=1))
-    #print(model.predict(X_test))
+    cost_per_lambda = []
+    for _lambda in [0.1, 0.01, 0.001]:
+        model = Model()
+        n_cols = X_train.shape[-1]
+        model.add(Dense(5, activation=sigmoid ,input_shape=(n_cols,)))
+        # model.add(Dense(5, activation=sigmoid))
+        # model.add(Dense(2, activation=sigmoid))
+        model.add(Dense(4, activation=sigmoid))
+        # model.add(Dense(6, activation=relu))
+        # model.add(Dense(4, activation=relu))
+        #model.add(Dense(4))
+        model.compile(learning_rate=0.5, initializer="random", epsilon=0.1)
+        if len(y_train.shape) == 1:
+            y_train = y_train.reshape(-1,1)
+        EPOCHS = 2500
+        model.fit(X_train, y_train, X_val, y_val, regularization=L2(_lambda=_lambda), epochs=EPOCHS, validation_split=0.2 ,batch_size=len(X_train))
+        print("Training metrics for lambda ", _lambda)
+        pred = model.predict(X_train)
+        print(classification_report(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_train, axis=1))
+        print("Test metrics for lambda ",_lambda)
+        pred = model.predict(X_test)
+        print(classification_report(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_test, axis=1))
+        print(np.argmax(pred,axis=1))
 
-    # if len(y.shape) > 1:
-    #     model.fit(X, y, epochs=1)
-        #print(model.predict(X))
-    # else:
-    #     print(model.fit(X, y.reshape(-1, 1), epochs=20))
+        # if len(y.shape) > 1:
+        #     model.fit(X, y, epochs=1)
+            #print(model.predict(X))
+        # else:
+        #     print(model.fit(X, y.reshape(-1, 1), epochs=20))
+        print("=======training cost and validation cost minimas for lambda {}===========".format(_lambda))
+        index=np.argmin(model.cost_per_epoch)
+        print(model.cost_per_epoch[index], index+1)
 
-    # index=np.argmin(model.cost_per_epoch)
-    # print(model.cost_per_epoch[index], index)
+        index = np.argmin(model.validation_cost_per_epoch)
+        print(model.cost_per_epoch[index], index+1)
 
-    index = np.argmin(model.loss_per_epoch)
-    print(model.loss_per_epoch[index], index)
+        print("=======training loss and validation loss minimas for lambda {}===========".format(_lambda))
+        index = np.argmin(model.loss_per_epoch)
+        print(model.loss_per_epoch[index], index+1)
+
+        index = np.argmin(model.validation_loss_per_epoch)
+        print(model.loss_per_epoch[index], index+1)
+        print("============================================================")
 
 
+        plt.title("Cost vs epoch for lambda {}".format(_lambda))
+        plt.plot(model.cost_per_epoch, label="training_cost")
+        plt.plot(model.validation_cost_per_epoch, label="validation_cost")
+        plt.legend()
+        plt.show()
 
-    # plt.plot(model.cost_per_epoch)
-    # plt.show()
-
-    plt.plot(model.loss_per_epoch)
-    plt.show()
+        plt.title("loss vs epoch for lambda {}".format(_lambda))
+        plt.plot(model.loss_per_epoch, label="training_loss")
+        plt.plot(model.validation_loss_per_epoch, label="validation_loss")
+        plt.legend()
+        plt.show()
 
 
 
