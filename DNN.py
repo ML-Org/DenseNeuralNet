@@ -5,10 +5,11 @@ from sklearn.datasets import make_classification, make_multilabel_classification
 import pandas as pd
 from sklearn.model_selection  import train_test_split
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report
+from sklearn.metrics import classification_report, f1_score
 from sklearn.utils import resample
 from imblearn.over_sampling import RandomOverSampler
 import warnings
+import seaborn as sns
 
 class DNN():
     def __init__(self, n_layers):
@@ -155,7 +156,9 @@ class Model():
             self.cost_per_epoch.append((-1 / len(train_X)) * self.cost)
         print("Validation - metrics", epoch+1)
         print(classification_report(y_true=np.argmax(expected_val_y, axis=1),y_pred=np.argmax(pred_val_y, axis=1)))
-            # if len(self.loss_per_epoch) > 2:
+        print(f1_score(y_true=np.argmax(expected_val_y, axis=1), y_pred=np.argmax(pred_val_y, axis=1), average="weighted"))
+
+        # if len(self.loss_per_epoch) > 2:
             #     if np.isclose(self.loss_per_epoch[-1], self.loss_per_epoch[-2], atol=0.000001):
             #         print("the algo converged at {}".format(epoch))
             #         print("loss at epoch {} and {} are {}, {}".format(epoch-1, epoch, self.loss_per_epoch[-2], self.loss_per_epoch[-1]))
@@ -185,6 +188,7 @@ class Model():
                 output = self.layers[idx].forward_pass(row)
                 row = output
             outputs.append(row.ravel())
+
         return outputs
 
     def cost_function(self, expected_output, pred):
@@ -336,7 +340,9 @@ def preprocess_data(data, upsample = False):
 
 
 if __name__ == "__main__":
-    seed=121
+    seed= 162
+    EPOCHS = 842
+    print("selected random seed {}".format(seed))
     np.random.seed(seed)
     # X,y  =  make_classification(n_samples=1000, n_features=4, n_informative=4, n_classes=4, n_redundant=0, n_repeated=0, random_state=123)
     # data_X = pd.DataFrame(X)
@@ -364,7 +370,18 @@ if __name__ == "__main__":
     train, validation = train_test_split(train, shuffle=True, test_size=0.2, random_state=seed, stratify=train[:, -1])
     X_train, X_test, X_val= train[:,:-1].astype(np.float64), test[:,:-1].astype(np.float64), validation[:,:-1].astype(np.float64)
     y_train, y_test, y_val = train[:,-1], test[:,-1], validation[:,-1]
-    print("="*10)
+
+    # sns.barplot(np.unique(y_train, return_counts=True)[0], np.unique(y_train, return_counts=True)[1])
+    # plt.title("Class Distribution of training data")
+    # plt.show()
+    # sns.barplot(np.unique(y_val, return_counts=True)[0], np.unique(y_val, return_counts=True)[1])
+    # plt.title("Class Distribution of validation data")
+    # plt.show()
+    # sns.barplot(np.unique(y_test, return_counts=True)[0], np.unique(y_test, return_counts=True)[1])
+    # plt.title("Class Distribution of test data")
+    # plt.show()
+
+    print("=" * 10)
     print(np.unique(y_train, return_counts=True))
     print(np.unique(y_val, return_counts=True))
     print(np.unique(y_test, return_counts=True))
@@ -376,7 +393,7 @@ if __name__ == "__main__":
 
     #y_train, y_test = train_test_split(np.array(labels), test_size=0.2, random_state=seed)
     cost_per_lambda = []
-    for _lambda in [0.1, 0.01, 0.001]:
+    for _lambda in [0.0]: #
         model = Model()
         n_cols = X_train.shape[-1]
         model.add(Dense(5, activation=sigmoid ,input_shape=(n_cols,)))
@@ -389,15 +406,19 @@ if __name__ == "__main__":
         model.compile(learning_rate=0.5, initializer="random", epsilon=0.1)
         if len(y_train.shape) == 1:
             y_train = y_train.reshape(-1,1)
-        EPOCHS = 2500
+
+        #EPOCHS = 2500
         model.fit(X_train, y_train, X_val, y_val, regularization=L2(_lambda=_lambda), epochs=EPOCHS, validation_split=0.2 ,batch_size=len(X_train))
         print("Training metrics for lambda ", _lambda)
         pred = model.predict(X_train)
         print(classification_report(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_train, axis=1))
+        #print(f1_score(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1),average="weighted"))
         print("Test metrics for lambda ",_lambda)
         pred = model.predict(X_test)
+        #cost = self.cost_function()
         print(classification_report(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_test, axis=1))
-        print(np.argmax(pred,axis=1))
+        #print(f1_score(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1),average="weighted"))
+        #print(np.argmax(pred,axis=1))
 
         # if len(y.shape) > 1:
         #     model.fit(X, y, epochs=1)
@@ -424,13 +445,15 @@ if __name__ == "__main__":
         plt.plot(model.cost_per_epoch, label="training_cost")
         plt.plot(model.validation_cost_per_epoch, label="validation_cost")
         plt.legend()
-        plt.show()
+        #plt.show()
+        plt.savefig("Fig/Cost-vs-epoch-{}-{}.png".format(_lambda, EPOCHS))
 
         plt.title("loss vs epoch for lambda {}".format(_lambda))
         plt.plot(model.loss_per_epoch, label="training_loss")
         plt.plot(model.validation_loss_per_epoch, label="validation_loss")
         plt.legend()
-        plt.show()
+        #plt.show()
+        plt.savefig("Fig/loss-vs-epoch-{}-{}.png".format(_lambda, EPOCHS))
 
 
 
