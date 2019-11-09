@@ -5,7 +5,7 @@ from sklearn.datasets import make_classification, make_multilabel_classification
 import pandas as pd
 from sklearn.model_selection  import train_test_split
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, f1_score
+from sklearn.metrics import classification_report, f1_score, roc_auc_score, multilabel_confusion_matrix, roc_curve
 from sklearn.utils import resample
 from imblearn.over_sampling import RandomOverSampler
 import warnings
@@ -36,7 +36,7 @@ class Model():
         self.layers.append(layer)
         return self
 
-    def compile(self, learning_rate=0.1 , optimizer=None, loss=None, initializer="glorot", epsilon=0.001):
+    def compile(self, learning_rate=0.1 , optimizer=None, loss=None, initializer="glorot", epsilon=0.001, init_constant=0):
         # init input layer
         #self.layers[0] = Input_Layer(self.layers[0])
         #self.layers.append(Dense())
@@ -48,7 +48,7 @@ class Model():
         # first layer should have ncols of input to init weights matrix of proper size
         # shape of weights matrix (n_units of layer l n_units of layer l-1
         self.layers[0].layer_shape= (self.layers[0].n_units, self.layers[0].layer_shape[0])
-        self.layers[0].init_weights(method=initializer, epsilon=epsilon)
+        self.layers[0].init_weights(method=initializer, epsilon=epsilon, init_constant=init_constant)
         # add learning rate to first layer
         self.layers[0].lr = learning_rate
         # self.layers[0].prev = None
@@ -62,7 +62,7 @@ class Model():
             #     self.layers[idx].lr = learning_rate
             # elif not isinstance(self.layers[idx], OutputLayer):
             self.layers[idx].layer_shape = (self.layers[idx].n_units, self.layers[idx - 1].n_units)
-            self.layers[idx].init_weights(method=initializer, epsilon=epsilon)
+            self.layers[idx].init_weights(method=initializer, epsilon=epsilon, init_constant=init_constant)
             # add learning rate to each layer
             self.layers[idx].lr = learning_rate
             #else: output layer doesn't need any weights
@@ -150,14 +150,40 @@ class Model():
             pred_val_y = np.array(pred_val_y)
             expected_val_y = val_y
             self.validation_loss_per_epoch.append((1/len(val_y)) * np.sum(np.square(expected_val_y-pred_val_y)))
-            self.validation_cost_per_epoch.append((-1/len(val_y)) * self.cost_function(expected_val_y, pred_val_y))
+            # dirty hack to get penalty calculated in previous execution
+            weights_sum=0
+            for layer in self.layers:
+                if not layer.isOutputLayer:
+                    # rip of bias
+                    weights_sum += np.sum(layer.weights[:,1:]**2)
+                else:
+                    weights_sum += np.sum(layer.weights ** 2)
+            weights_sum =  (regularization._lambda/2) * weights_sum
+
+            # penalty = (0.5) * weights_sum * regularization._lambda
+            self.validation_cost_per_epoch.append((-1/len(val_y)) * (self.cost_function(expected_val_y, pred_val_y) - weights_sum))
                 #self.loss_per_batch += ((1 / len(mini_batch)) * self.loss)
             self.loss_per_epoch.append((1 / len(train_X)) * self.loss)
-            self.cost_per_epoch.append((-1 / len(train_X)) * self.cost)
-        print("Validation - metrics", epoch+1)
+            self.cost_per_epoch.append((-1 / len(train_X)) * (self.cost - weights_sum))
+        print("Validation - metrics {} hidden_units {} layers".format(self.layers[0].n_units, len(self.layers)-1))
         print(classification_report(y_true=np.argmax(expected_val_y, axis=1),y_pred=np.argmax(pred_val_y, axis=1)))
-        print(f1_score(y_true=np.argmax(expected_val_y, axis=1), y_pred=np.argmax(pred_val_y, axis=1), average="weighted"))
+        print(f1_score(y_true=np.argmax(expected_val_y, axis=1), y_pred=np.argmax(pred_val_y, axis=1), average="micro"))
+        print(multilabel_confusion_matrix(y_true=np.argmax(expected_val_y, axis=1), y_pred=np.argmax(pred_val_y, axis=1)), "C_matrix")
+        print(roc_auc_score(y_true=expected_val_y, y_score=pred_val_y), "validation_ROC")
 
+        # # roc plots
+        # fpr, tpr, thresholds = roc_curve(np.argmax(expected_val_y, axis=1), np.argmax(pred_val_y, axis=1), pos_label=0)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_A")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(expected_val_y, axis=1), np.argmax(pred_val_y, axis=1), pos_label=1)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_B")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(expected_val_y, axis=1), np.argmax(pred_val_y, axis=1), pos_label=2)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_C")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(expected_val_y, axis=1), np.argmax(pred_val_y, axis=1), pos_label=3)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_D")
+        # plt.plot([0,1],[0,1], linestyle=":", label="chance")
+        # plt.title("ROC curve for Validation Set")
+        # plt.legend()
+        # plt.show()
         # if len(self.loss_per_epoch) > 2:
             #     if np.isclose(self.loss_per_epoch[-1], self.loss_per_epoch[-2], atol=0.000001):
             #         print("the algo converged at {}".format(epoch))
@@ -263,19 +289,19 @@ class Dense():
         return deltas,  deltas_acc
 
 
-    def update_weights(self, n_samples ,regularize=L2(0.001)):
+    def update_weights(self, n_samples ,regularize=None):
         #ignore bias in deltas
         l2_penalty_vector=0
         if regularize is not None:
-            l2_penalty = regularize._lambda * (1/n_samples) * np.sum(self.weights)
-            l2_penalty_vector = np.tile(l2_penalty, reps=len(self.deltas_acc)).reshape(-1, 1)
+            l2_penalty_vector = (regularize._lambda/n_samples) * self.weights
+            #l2_penalty_vector = np.tile(l2_penalty, reps=len(self.deltas_acc)).reshape(-1, 1)
             # don't penalize bias terms
-            l2_penalty_vector[0]=0
-        self.weights -= (self.lr * self.deltas_acc) + l2_penalty_vector
+            l2_penalty_vector[:, 0]=0
+        self.weights -= self.lr * ( self.deltas_acc + l2_penalty_vector )
         return self.weights
 
 
-    def init_weights(self,bias=True, method="glorot", epsilon=0.001):
+    def init_weights(self,bias=True, method=None, epsilon=0.001, init_constant=None):
         if method == "glorot" and method=="zeros" and method=="random":
             raise Exception("Both Glorot, random and  Zero intilization can't be used at the same time")
         if method=="glorot":
@@ -305,6 +331,12 @@ class Dense():
                 self.weights = np.random.uniform(low=-self.epsilon, high=self.epsilon,
                                                  size=self.layer_shape[0] * self.layer_shape[1]).reshape(
                     self.layer_shape)
+        elif method == "symmetric":
+            if bias:
+                self.weights = np.repeat(init_constant, repeats =self.layer_shape[0] * (self.layer_shape[1] + 1)).reshape(self.layer_shape[0], self.layer_shape[1] + 1)
+            else:
+                self.weights = np.repeat(init_constant, repeats =self.layer_shape[0] * (self.layer_shape[1])).reshape(self.layer_shape[0], self.layer_shape[1])
+
         else:
             self.epsilon = epsilon
             if bias:
@@ -341,7 +373,7 @@ def preprocess_data(data, upsample = False):
 
 if __name__ == "__main__":
     seed= 162
-    EPOCHS = 842
+    EPOCHS = 5000
     print("selected random seed {}".format(seed))
     np.random.seed(seed)
     # X,y  =  make_classification(n_samples=1000, n_features=4, n_informative=4, n_classes=4, n_redundant=0, n_repeated=0, random_state=123)
@@ -392,68 +424,105 @@ if __name__ == "__main__":
     y_val = np.array(pd.get_dummies(y_val), dtype=np.int32)
 
     #y_train, y_test = train_test_split(np.array(labels), test_size=0.2, random_state=seed)
-    cost_per_lambda = []
-    for _lambda in [0.0]: #
+    #cost_per_lambda = {}
+    #_lambda = 0
+    hidden_units =2
+    _layer=1
+    for _lambda in [0]: #
         model = Model()
         n_cols = X_train.shape[-1]
-        model.add(Dense(5, activation=sigmoid ,input_shape=(n_cols,)))
+        model.add(Dense(hidden_units, activation=sigmoid ,input_shape=(n_cols,)))
         # model.add(Dense(5, activation=sigmoid))
         # model.add(Dense(2, activation=sigmoid))
+
+        #for layer in range(1,_layer):
+        model.add(Dense(hidden_units, activation=sigmoid))
         model.add(Dense(4, activation=sigmoid))
         # model.add(Dense(6, activation=relu))
         # model.add(Dense(4, activation=relu))
         #model.add(Dense(4))
-        model.compile(learning_rate=0.5, initializer="random", epsilon=0.1)
+        model.compile(learning_rate=0.5, initializer="symmetrics", epsilon=0.1, init_constant=2.0)
         if len(y_train.shape) == 1:
             y_train = y_train.reshape(-1,1)
 
         #EPOCHS = 2500
         model.fit(X_train, y_train, X_val, y_val, regularization=L2(_lambda=_lambda), epochs=EPOCHS, validation_split=0.2 ,batch_size=len(X_train))
-        print("Training metrics for lambda ", _lambda)
+        print("Training metrics for {} hidden units  {} layers".format( hidden_units, _layer))
         pred = model.predict(X_train)
+        print(roc_auc_score(y_true=y_train, y_score=pred), "train_ROC")
         print(classification_report(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_train, axis=1))
-        #print(f1_score(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1),average="weighted"))
-        print("Test metrics for lambda ",_lambda)
+        print(f1_score(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1),average="micro"))
+        print(multilabel_confusion_matrix(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1)), "C_matrix")
+        #print("Test metrics for lambda ",_lambda)
+        # # roc plots
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_train, axis=1), np.argmax(pred, axis=1), pos_label=0)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_A")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_train, axis=1), np.argmax(pred, axis=1), pos_label=1)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_B")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_train, axis=1), np.argmax(pred, axis=1), pos_label=2)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_C")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_train, axis=1), np.argmax(pred, axis=1), pos_label=3)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_D")
+        # plt.plot([0, 1], [0, 1], linestyle=":", label="chance")
+        # plt.title("ROC curve for Training Set")
+        # plt.legend()
+        # plt.show()
+
+
+        print("Test metrics for {} hidden units {} layers ".format(hidden_units, _layer))
         pred = model.predict(X_test)
+        print(roc_auc_score(y_true=y_test, y_score=pred), "test_ROC")
+        print(multilabel_confusion_matrix(y_true=np.argmax(y_test,axis=1), y_pred=np.argmax(pred, axis=1)), "C_matrix")
+        # # roc plots
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_test, axis=1), np.argmax(pred, axis=1), pos_label=0)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_A")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_test, axis=1), np.argmax(pred, axis=1), pos_label=1)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_B")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_test, axis=1), np.argmax(pred, axis=1), pos_label=2)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_C")
+        # fpr, tpr, thresholds = roc_curve(np.argmax(y_test, axis=1), np.argmax(pred, axis=1), pos_label=3)
+        # plt.plot(tpr, fpr, label="ROC_CLASS_D")
+        # plt.plot([0, 1], [0, 1], linestyle=":", label="chance")
+        # plt.title("ROC curve for Test Set")
+        # plt.legend()
+        # plt.show()
         #cost = self.cost_function()
         print(classification_report(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1))) #labels=np.unique(np.argmax(y_test, axis=1))
-        #print(f1_score(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1),average="weighted"))
+        print(f1_score(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1),average="micro"))
         #print(np.argmax(pred,axis=1))
-
-        # if len(y.shape) > 1:
-        #     model.fit(X, y, epochs=1)
-            #print(model.predict(X))
-        # else:
-        #     print(model.fit(X, y.reshape(-1, 1), epochs=20))
-        print("=======training cost and validation cost minimas for lambda {}===========".format(_lambda))
+        #cost_per_lambda[hidden_units] = (model.cost_per_epoch, model.validation_cost_per_epoch)
+        print("=======training cost and validation cost minimas for lambda {} and {} hidden units {} layers ===========".format(_lambda, hidden_units, _layer))
         index=np.argmin(model.cost_per_epoch)
         print(model.cost_per_epoch[index], index+1)
 
         index = np.argmin(model.validation_cost_per_epoch)
-        print(model.cost_per_epoch[index], index+1)
-
-        print("=======training loss and validation loss minimas for lambda {}===========".format(_lambda))
-        index = np.argmin(model.loss_per_epoch)
-        print(model.loss_per_epoch[index], index+1)
-
-        index = np.argmin(model.validation_loss_per_epoch)
-        print(model.loss_per_epoch[index], index+1)
-        print("============================================================")
+        print(model.validation_cost_per_epoch[index], index+1)
 
 
-        plt.title("Cost vs epoch for lambda {}".format(_lambda))
+        # print("=======training loss and validation loss minimas for lambda {} and {} hidden units ===========".format(_lambda, hidden_units))
+        # index = np.argmin(model.loss_per_epoch)
+        # print(model.loss_per_epoch[index], index+1)
+        #
+        # index = np.argmin(model.validation_loss_per_epoch)
+        # print(model.loss_per_epoch[index], index+1)
+        # print("============================================================")
+
+
+        plt.title("Cost vs epoch \n lambda {}, {} hidden units, {} layer \n and {} init weights ".format(_lambda, hidden_units, _layer, "Ones intialization"))
         plt.plot(model.cost_per_epoch, label="training_cost")
         plt.plot(model.validation_cost_per_epoch, label="validation_cost")
+        plt.axhline(model.validation_cost_per_epoch[index], linestyle=":", label="min_validation_cost")
+        plt.axvline(index, linestyle=":", label="min_val_cost_epoch" )
         plt.legend()
-        #plt.show()
-        plt.savefig("Fig/Cost-vs-epoch-{}-{}.png".format(_lambda, EPOCHS))
+        plt.show()
+        #plt.savefig("Fig/Cost-vs-epoch-{}-{}-{}.png".format(_lambda, EPOCHS, hidden_units))
 
-        plt.title("loss vs epoch for lambda {}".format(_lambda))
-        plt.plot(model.loss_per_epoch, label="training_loss")
-        plt.plot(model.validation_loss_per_epoch, label="validation_loss")
-        plt.legend()
-        #plt.show()
-        plt.savefig("Fig/loss-vs-epoch-{}-{}.png".format(_lambda, EPOCHS))
+        # plt.title("loss vs epoch for lambda {} and {} hidden units".format(_lambda, hidden_units))
+        # plt.plot(model.loss_per_epoch, label="training_loss")
+        # plt.plot(model.validation_loss_per_epoch, label="validation_loss")
+        # plt.legend()
+        # plt.show()
+        #plt.savefig("Fig/loss-vs-epoch-{}-{}-{}.png".format(_lambda, EPOCHS, hidden_units))
 
 
 
