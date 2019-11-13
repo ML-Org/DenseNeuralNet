@@ -1,25 +1,15 @@
 from utils import L2, sigmoid, mini_batches, relu, activation_fn_derivative, tanh
 import numpy as np
-from sklearn.datasets import make_classification, make_multilabel_classification
 import pandas as pd
 from sklearn.model_selection import train_test_split
 import matplotlib.pyplot as plt
-from sklearn.metrics import classification_report, f1_score, roc_auc_score, multilabel_confusion_matrix, roc_curve, confusion_matrix
-from sklearn.utils import resample
+from sklearn.metrics import classification_report, f1_score, roc_auc_score, multilabel_confusion_matrix, roc_curve, \
+    confusion_matrix
 from imblearn.over_sampling import RandomOverSampler
 import warnings
 import seaborn as sns
 from sklearn.feature_selection import SelectKBest, chi2
 from sklearn.impute import SimpleImputer
-
-
-class DNN():
-    def __init__(self, n_layers):
-        pass
-
-    def init_layers(self):
-        pass
-
 
 class Model():
     def __init__(self):
@@ -38,6 +28,15 @@ class Model():
 
     def compile(self, learning_rate=0.1, optimizer=None, loss=None, initializer="glorot", epsilon=0.001,
                 init_constant=0):
+        """
+        :param learning_rate: defaults to 0.1
+        :param optimizer: defaults to Nones
+        :param loss: defaults to None
+        :param initializer: defaults Glorot
+        :param epsilon: defaults 0.001
+        :param init_constant: if intializer is symmetric, weights are all init with
+        :return:
+        """
 
         assert self.layers[0].layer_shape is not None
         # first layer should have ncols of input to init weights matrix of proper size
@@ -58,7 +57,6 @@ class Model():
             # add an identity to output layer
             if idx == len(self.layers) - 1:
                 self.layers[idx].isOutputLayer = True
-
 
     def fit(self, X, y, val_X, val_y, regularization=L2(0.001), validation_split=0.2, epochs=100, batch_size=10):
 
@@ -314,10 +312,10 @@ def preprocess_data(data, upsample=False):
 if __name__ == "__main__":
     seed = 162
     EPOCHS = 2500
-    _lambdas=[0.01]
+    _lambdas = [0.01]
     # replace this with your requried features
-    required_cols = ["all_NBME_avg_n4","all_mcqs_avg_n20", "CBSE_01","CBSE_02","LEVEL"]
-    #replace this with ur dataset file
+    required_cols = ["all_NBME_avg_n4", "all_mcqs_avg_n20", "CBSE_01", "CBSE_02", "LEVEL"]
+    # replace this with ur dataset file
     data_raw = pd.read_csv("BSOM_Dataset_for_HW3.csv")
     print("selected random seed {}".format(seed))
     np.random.seed(seed)
@@ -328,16 +326,15 @@ if __name__ == "__main__":
     y = data[["LEVEL"]]
     X = data.drop("LEVEL", axis=1)
 
-
     # feature selection using filter method
     n_best = 10
     k_best = SelectKBest(chi2, k=n_best)
     selected_features = k_best.fit_transform(X, y)
     cols = list(data.columns[np.nonzero(k_best.get_support())])
     scores = k_best.scores_[np.nonzero(k_best.get_support())]
-    print(" {} best features {} with scores {}".format(n_best, cols ,scores))
+    print(" {} best features {} with scores {}".format(n_best, cols, scores))
 
-    #display a bar plot
+    # display a bar plot
     sns.barplot(cols, scores)
     plt.xlabel("features")
     plt.ylabel("Chi_Squared")
@@ -352,7 +349,6 @@ if __name__ == "__main__":
 
     print(cols)
 
-
     data = data.dropna()
     # using stratified split to ensure all classes are present while testing
     pre_processed_data = preprocess_data(data, upsample=False)
@@ -362,7 +358,6 @@ if __name__ == "__main__":
     X_train, X_test, X_val = train[:, :-1].astype(np.float64), test[:, :-1].astype(np.float64), validation[:,
                                                                                                 :-1].astype(np.float64)
     y_train, y_test, y_val = train[:, -1], test[:, -1], validation[:, -1]
-
 
     print("=" * 10)
     print(np.unique(y_train, return_counts=True))
@@ -391,7 +386,7 @@ if __name__ == "__main__":
         pred = model.predict(X_train)
         print(roc_auc_score(y_true=y_train, y_score=pred), "train_ROC")
         print(classification_report(y_true=np.argmax(y_train, axis=1),
-                                    y_pred=np.argmax(pred, axis=1)))  # labels=np.unique(np.argmax(y_train, axis=1))
+                                    y_pred=np.argmax(pred, axis=1)))
         print(f1_score(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1), average="micro"))
         print(confusion_matrix(y_true=np.argmax(y_train, axis=1), y_pred=np.argmax(pred, axis=1)),
               "C_matrix")
@@ -402,7 +397,7 @@ if __name__ == "__main__":
         print(confusion_matrix(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1)), "C_matrix")
 
         print(classification_report(y_true=np.argmax(y_test, axis=1),
-                                    y_pred=np.argmax(pred, axis=1)))  # labels=np.unique(np.argmax(y_test, axis=1))
+                                    y_pred=np.argmax(pred, axis=1)))
         print(f1_score(y_true=np.argmax(y_test, axis=1), y_pred=np.argmax(pred, axis=1), average="micro"))
 
         print(
