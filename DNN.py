@@ -59,6 +59,17 @@ class Model():
                 self.layers[idx].isOutputLayer = True
 
     def fit(self, X, y, val_X, val_y, regularization=L2(0.001), validation_split=0.2, epochs=100, batch_size=10):
+        """
+        :param X: Predictors/ Features (nd-array) shape (n_samples, n_features)
+        :param y: target (nd-array) shape - (n_samples,1)
+        :param val_X: validation_split features
+        :param val_y: validation split target
+        :param regularization: regularization L2()- defaults to L2(0.001)
+        :param validation_split: deprecated - not in use
+        :param epochs: iterations
+        :param batch_size: mini_batch size
+        :return: class probabilities
+        """
 
         train_X = X
         train_y = y
@@ -153,6 +164,11 @@ class Model():
         return outputs
 
     def predict(self, X):
+        """
+        Predicts the class probabilities
+        :param X: features, shape - (n_samples, n_features)
+        :return: predicted class probabilities
+        """
         outputs = []
         for row_idx, row in enumerate(X):
             row = np.hstack((1, row)).reshape(-1, 1)
@@ -160,7 +176,6 @@ class Model():
                 output = self.layers[idx].forward_pass(row)
                 row = output
             outputs.append(row.ravel())
-
         return outputs
 
     def cost_function(self, expected_output, pred):
